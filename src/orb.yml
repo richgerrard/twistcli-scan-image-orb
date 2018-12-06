@@ -1,0 +1,167 @@
+version: 2.1
+
+description: >
+  This orb is a wrapper for the Twistlock twistcli scanning tool.
+  To use this orb, you must have a licensed Twistlock installation
+  and credentials for a user with the CI User role in the Twistlock Console.
+  For detailed usage information, see https://github.com/add-twistlock/twistcli-scan-image-orb
+examples:
+  docker-build-save-load-scan:
+    usage:
+      version: 2.1
+      
+      orbs:
+        twistcli: twistlock/twistcli-scan@1.0.4
+      
+      jobs:
+        docker-build-and-save:
+          executor: twistcli/default
+          steps:
+            - checkout
+            - run: docker build -t myrepo/myimage:tag .
+            - run: mkdir -p workspace
+            - run: docker save myrepo/myimage:tag -o workspace/image.tar
+            - persist_to_workspace:
+                root: workspace
+                paths:
+                    - image.tar
+      
+      workflows:
+        scan-image:
+          jobs:
+            - docker-build-and-save
+            - twistcli/scan-image:
+                requires:
+                  - docker-build-and-save
+                context: tl_scan_context
+                image: myrepo/myimage:tag
+                imagetar: image.tar
+                vuln-thresh: critical
+                comp-thresh: ''
+                only-fixed: true
+
+executors:
+  default:
+    machine: true
+    working_directory: /tmp/twistlock-scan
+
+commands:
+  install:
+    description: Download the twistcli static binary from the Console
+    parameters:
+      tl_user:
+        description: The Twistlock Console user with the CI User role
+        type: string
+      tl_pass:
+        description: The Twistlock Console user's password
+        type: env_var_name
+      tl_console_url:
+        description: The base URL for the console -- http://console.<my_company>.com:8083 -- without a trailing /
+        type: string
+    steps:
+      - run: curl -k -u <<parameters.tl_user>>:${<<parameters.tl_pass>>} --output ./twistcli <<parameters.tl_console_url>>/api/v1/util/twistcli
+      - run: sudo chmod a+x ./twistcli 
+
+  load:
+    description: Load the image into the Executor machine from the tar file stashed in the Workspace
+    parameters:
+      tl_image_tar:
+        description: The name of the image tar file stored in the workspace
+        type: string
+      tl_workspace_name:
+        description: Name of workspace to docker save the image into so it can be scanned by orb
+        type: string
+    steps:
+      - attach_workspace:
+          at: <<parameters.tl_workspace_name>>
+      - run: docker load -i <<parameters.tl_workspace_name>>/<<parameters.tl_image_tar>>
+
+  scan:
+    description: Scan the container image with twistcli
+    parameters:
+      tl_user:
+        description: The Twistlock Console user with the CI User role
+        type: string
+      tl_pass:
+        description: The Twistlock Console user's password
+        type: env_var_name
+      tl_console_url:
+        description: The base URL for the console -- http://console.<my_company>.com:8083 -- without a trailing /
+        type: string
+      tl_image:
+        description: The name of the image to scan -- myimage or myorg/myimage or myorg/myimage:latest
+        type: string
+      tl_vuln_thresh:
+        description: Sets the minimum vulnerability severity that returns a fail exit code. Supported values are low, medium, high, and critical 
+        type: string
+      tl_comp_thresh:
+        description: Sets the minimum compliance issue severity that returns a fail exit code. Supported values are low, medium, high, and critical 
+        type: string
+      tl_only_fixed:
+        description: Whether to only report vulnerabilities with fixes available
+        type: boolean
+    steps:
+      - run: >
+          args=();
+          [[ '<<parameters.tl_vuln_thresh>>' != '' ]] && args+=( '--vulnerability-threshold <<parameters.tl_vuln_thresh>>' );
+          [[ '<<parameters.tl_comp_thresh>>' != '' ]] && args+=( '--compliance-threshold <<parameters.tl_comp_thresh>>' );
+          [[ <<parameters.tl_only_fixed>> == true ]] && args+=( '--only-fixed' );
+          ./twistcli images scan --details -address <<parameters.tl_console_url>> -u <<parameters.tl_user>> -p ${<<parameters.tl_pass>>}
+          ${args[@]}
+          <<parameters.tl_image>>
+
+jobs:
+  scan-image:
+    executor: default
+    parameters:
+      tl_user:
+        description: The Twistlock Console user with the CI User role
+        type: string
+        default: $TL_USER
+      tl_pass:
+        description: The Twistlock Console user's password
+        type: env_var_name
+        default: TL_PASS
+      tl_console_url:
+        description: The base URL for the console -- http://console.<my_company>.com:8083 -- without a trailing /
+        type: string
+        default: $TL_CONSOLE_URL
+      vuln-thresh:
+        description: Sets the minimum vulnerability severity that returns a fail exit code. Supported values are low, medium, high, and critical 
+        type: string
+        default: ''
+      comp-thresh:
+        description: Sets the minimum compliance issue severity that returns a fail exit code. Supported values are low, medium, high, and critical 
+        type: string
+        default: ''
+      only-fixed:
+        description: Whether to only report vulnerabilities with fixes available
+        type: boolean
+        default: false 
+      workspace-name:
+        description: Name of workspace to docker save the image-tar into so it can be scanned by orb
+        type: string
+        default: workspace 
+      image-tar:
+        description: The name of the image tar file stored in the workspace -- defaults to image.tar
+        type: string
+        default: image.tar
+      image:
+        description: The name of the image to scan -- myimage or myorg/myimage or myorg/myimage:latest
+        type: string
+    steps:
+      - install: 
+          tl_user: <<parameters.tl_user>>
+          tl_pass: <<parameters.tl_pass>>
+          tl_console_url: <<parameters.tl_console_url>>
+      - load:
+          tl_workspace_name: <<parameters.workspace-name>>
+          tl_image_tar: <<parameters.image-tar>>
+      - scan:
+          tl_user: <<parameters.tl_user>>
+          tl_pass: <<parameters.tl_pass>>
+          tl_console_url: <<parameters.tl_console_url>>
+          tl_vuln_thresh: <<parameters.vuln-thresh>>
+          tl_comp_thresh: <<parameters.comp-thresh>>
+          tl_only_fixed: <<parameters.only-fixed>>
+          tl_image: <<parameters.image>>
