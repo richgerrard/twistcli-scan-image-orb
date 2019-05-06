@@ -35,7 +35,7 @@ examples:
                   - docker-build-and-save
                 context: tl_scan_context
                 image: myrepo/myimage:tag
-                imagetar: image.tar
+                image-tar: image.tar
                 vuln-thresh: critical
                 comp-thresh: ''
                 only-fixed: true
